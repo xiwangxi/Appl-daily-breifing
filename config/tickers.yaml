@@ -1,0 +1,64 @@
+# AAPL Daily Digest - 关联公司配置
+# 增删股票只需要改这个文件，代码不用动。
+# ticker 必须是 Finnhub/yfinance/Polygon 都认识的美股代码；
+# 非美股上市公司（如富士康、华为）填 name_only: true，只用于新闻关键词搜索，不拉股价/期权数据。
+
+primary:
+  ticker: AAPL
+  name: Apple
+
+core_suppliers:
+  - ticker: TSM
+    name: 台积电 (TSMC)
+  - ticker: null
+    name: 富士康 (Foxconn / Hon Hai)
+    name_only: true
+    news_keywords: ["Foxconn", "Hon Hai", "富士康"]
+  - ticker: QCOM
+    name: Qualcomm
+  - ticker: SWKS
+    name: Skyworks Solutions
+  - ticker: QRVO
+    name: Qorvo
+  - ticker: AVGO
+    name: Broadcom
+  - ticker: STM
+    name: STMicroelectronics
+  - ticker: LRCX
+    name: Lam Research
+  - ticker: null
+    name: 大立光 (Largan Precision)
+    name_only: true
+    news_keywords: ["Largan Precision", "大立光"]
+
+customers_channel:
+  - ticker: T
+    name: AT&T
+  - ticker: VZ
+    name: Verizon
+  - ticker: TMUS
+    name: T-Mobile US
+
+competitors:
+  - ticker: GOOGL
+    name: Alphabet / Google
+  - ticker: null
+    name: Samsung
+    name_only: true
+    news_keywords: ["Samsung Galaxy", "Samsung Electronics"]
+  - ticker: null
+    name: Huawei
+    name_only: true
+    news_keywords: ["Huawei"]
+
+ecosystem:
+  - ticker: MSFT
+    name: Microsoft
+  - ticker: META
+    name: Meta
+
+# 新闻抓取窗口（小时）
+news_lookback_hours: 48
+
+# 已发送新闻去重保留天数
+dedup_retention_days: 7
