@@ -62,7 +62,7 @@ def _google_news_rss(query: str, lookback_hours: int, ticker: str = None) -> lis
             "title": entry.get("title"),
             "url": entry.get("link"),
             "source": source or "Google News",
-            "summary": "",
+            "summary": entry.get("summary", ""),
             "published": published.isoformat() if published else None,
         })
     return out

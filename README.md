@@ -14,8 +14,8 @@ config/
 src/
   fetch_price.py        # 股价速览（yfinance）
   fetch_news.py         # 新闻（Finnhub company-news + Google News RSS）
-  fetch_analyst.py      # 分析师评级/目标价（Finnhub）
-  fetch_options.py      # 期权链/PCR/IV/max pain/异常大单启发式检测（Polygon.io）
+  fetch_analyst.py      # 分析师评级/目标价（yfinance）
+  fetch_options.py      # 期权链/PCR/IV/max pain/异常大单启发式检测（Tradier sandbox）
   summarize.py          # Claude API 做新闻去重/排序/摘要 + 生成"今日关注点"
   build_message.py      # 拼 Telegram HTML 消息，超长自动按板块分段
   send_telegram.py      # 调 Telegram Bot API 发送
@@ -35,10 +35,11 @@ data/iv_history.json     # IV 历史，用于计算隐含波动率的百分位
 3. 浏览器打开 `https://api.telegram.org/bot<TOKEN>/getUpdates`，从返回 JSON 的
    `message.chat.id` 里拿到你的 Chat ID。
 
-### 2. 数据源 API Key（都有免费额度）
-- **Finnhub**（新闻 + 分析师数据）：https://finnhub.io/register
-- **Polygon.io**（期权链/IV/PCR，Options Starter 免费套餐即可，数据约15分钟延迟）：
-  https://polygon.io/dashboard/signup
+### 2. 数据源 API Key
+- **Finnhub**（新闻，免费额度够用）：https://finnhub.io/register
+  （分析师评级/目标价改用 yfinance 免费拿，不依赖 Finnhub 的付费专属接口）
+- **Tradier**（期权链/IV/PCR，免费 sandbox，需要注册开发者账号，有审核）：
+  https://developer.tradier.com/user/sign_up
 - **Anthropic Claude API**（新闻摘要）：https://console.anthropic.com/settings/keys
 
 ### 3. 配置到 GitHub（推荐，免运维）
@@ -49,7 +50,7 @@ data/iv_history.json     # IV 历史，用于计算隐含波动率的百分位
 | `TELEGRAM_BOT_TOKEN` | 第1步拿到的 token |
 | `TELEGRAM_CHAT_ID` | 第1步拿到的 chat id |
 | `FINNHUB_API_KEY` | Finnhub key |
-| `POLYGON_API_KEY` | Polygon key |
+| `TRADIER_API_KEY` | Tradier sandbox access token |
 | `ANTHROPIC_API_KEY` | Claude API key |
 
 可选：在 **Variables** 里加 `CLAUDE_MODEL` 覆盖默认模型（默认 `claude-haiku-4-5-20251001`，
@@ -94,14 +95,18 @@ python main.py
 
 ## 五、已知限制 / MVP 说明
 
-- **期权数据**：Polygon.io 免费/基础套餐约有15分钟延迟，对开盘前晨报够用，但不是实时的。
+- **期权数据**：用 Tradier 的免费 sandbox 环境，数据有一定延迟，对开盘前晨报够用，但不是实时的。
+  sandbox 账号需要在 Tradier 官网申请，有审核（不保证立即通过）。
 - **异常期权大单**：用启发式规则近似（单张合约当日成交量 ≥ 3倍未平仓量），不是 Unusual Whales
   那种基于逐笔成交方向判断的专业数据。如果之后想接入 Unusual Whales API，只需要在
   `src/fetch_options.py` 里加一个新的数据源函数，`build_message.py` 的展示逻辑不用改。
 - **IV 历史百分位**：数据从项目上线那天开始每天积累到 `data/iv_history.json`，积累不满10个
   交易日之前，消息里会显示"历史数据积累中"。
-- **分析师目标价/评级**：依赖 Finnhub 免费额度，个别接口在免费层可能不稳定，拿不到时消息里
-  会标注"数据源暂不可用"，不影响其它板块正常发送。
+- **分析师目标价/评级**：用 yfinance 免费拿（Finnhub 免费版把这两个接口限制成付费专属了），
+  拿不到时消息里会标注"数据源暂不可用"，不影响其它板块正常发送。
+- **新闻摘要**：Claude 会基于标题+原始简介做真正的归纳整理，用中文输出，不是简单翻译标题——
+  但如果 Claude API 调用失败会降级成"按时间排序的原始英文标题"，这种情况消息里的"今日关注点"
+  会明确提示"AI摘要暂不可用"。
 - **去重**：`data/seen_news.json` 记录已推送过的新闻链接，保留天数由 `config/tickers.yaml`
   的 `dedup_retention_days` 控制（默认7天），每次 workflow 运行后自动 commit 回仓库。
 
