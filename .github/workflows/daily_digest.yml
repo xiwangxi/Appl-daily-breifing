@@ -31,7 +31,8 @@ jobs:
 
       - name: Run daily digest
         env:
-          RUN_MODE: scheduled
+          # 只有真正的 schedule 触发才检查"是不是本地7点"；手动 workflow_dispatch 直接跑，方便调试。
+          RUN_MODE: ${{ github.event_name == 'schedule' && 'scheduled' || 'manual' }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}
