@@ -39,7 +39,6 @@ def load_config():
         "telegram_bot_token": os.environ.get("TELEGRAM_BOT_TOKEN"),
         "telegram_chat_id": os.environ.get("TELEGRAM_CHAT_ID"),
         "finnhub_api_key": os.environ.get("FINNHUB_API_KEY"),
-        "tradier_api_key": os.environ.get("TRADIER_API_KEY"),
         "anthropic_api_key": os.environ.get("ANTHROPIC_API_KEY"),
         "claude_model": os.environ.get("CLAUDE_MODEL") or "claude-haiku-4-5-20251001",
         "tickers": tickers_config,
@@ -96,7 +95,7 @@ def main():
         "fetch_analyst",
     )
     options = safe_call(
-        lambda: fetch_options.get_options_snapshot(ticker, cfg["tradier_api_key"]),
+        lambda: fetch_options.get_options_snapshot(ticker),
         {"available": False},
         "fetch_options",
     )

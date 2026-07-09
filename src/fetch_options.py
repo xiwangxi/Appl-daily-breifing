@@ -1,8 +1,8 @@
-"""期权市场数据：PCR、IV、max pain、异常大单启发式检测。数据源：Tradier Market Data API（sandbox）。
+"""期权市场数据：PCR、IV、max pain、异常大单启发式检测。数据源：yfinance（免费，抓 Yahoo Finance 期权链）。
 
 MVP 说明：
-- 用的是 Tradier 的免费 sandbox 环境（https://sandbox.tradier.com），个人开发者申请即可，
-  数据有一定延迟，足够"开盘前晨报"使用。
+- 完全免费，不需要注册/API key，也没有付费门槛或美国身份限制。
+- Yahoo Finance 的期权数据不是逐笔实时的，但对"开盘前晨报"这种场景足够。
 - "异常期权大单"（Unusual Options Activity）这里用启发式规则近似：
   单张合约当日成交量 >= 3倍未平仓量 且 成交量超过阈值，按成交额排序取前几名。
   这不等于 Unusual Whales 那种基于逐笔大单方向判断的专业数据，只作为参考信号。
@@ -13,59 +13,10 @@ import json
 import os
 from datetime import date, datetime
 
-import requests
-
-TRADIER_BASE = "https://sandbox.tradier.com/v1"
 IV_HISTORY_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "iv_history.json")
 MAX_DAYS_TO_EXPIRY = 45
 UNUSUAL_VOL_OI_RATIO = 3.0
 UNUSUAL_MIN_VOLUME = 500
-
-
-def _headers(api_key: str) -> dict:
-    return {"Authorization": f"Bearer {api_key}", "Accept": "application/json"}
-
-
-def _get_underlying_price(ticker: str, api_key: str) -> float | None:
-    resp = requests.get(
-        f"{TRADIER_BASE}/markets/quotes",
-        params={"symbols": ticker},
-        headers=_headers(api_key),
-        timeout=15,
-    )
-    resp.raise_for_status()
-    quote = (resp.json().get("quotes") or {}).get("quote")
-    if isinstance(quote, list):
-        quote = quote[0] if quote else None
-    return quote.get("last") if quote else None
-
-
-def _get_expirations(ticker: str, api_key: str) -> list:
-    resp = requests.get(
-        f"{TRADIER_BASE}/markets/options/expirations",
-        params={"symbol": ticker, "includeAllRoots": "true"},
-        headers=_headers(api_key),
-        timeout=15,
-    )
-    resp.raise_for_status()
-    dates = (resp.json().get("expirations") or {}).get("date") or []
-    if isinstance(dates, str):
-        dates = [dates]
-    return dates
-
-
-def _get_chain(ticker: str, expiration: str, api_key: str) -> list:
-    resp = requests.get(
-        f"{TRADIER_BASE}/markets/options/chains",
-        params={"symbol": ticker, "expiration": expiration, "greeks": "true"},
-        headers=_headers(api_key),
-        timeout=20,
-    )
-    resp.raise_for_status()
-    options = (resp.json().get("options") or {}).get("option") or []
-    if isinstance(options, dict):
-        options = [options]
-    return options
 
 
 def _days_to_expiry(expiration_date: str) -> int:
@@ -100,19 +51,35 @@ def _iv_percentile(today_iv: float) -> tuple:
     return round(rank, 1), len(values)
 
 
+def _contracts_from_chain(chain, expiration: str) -> list:
+    """把 yfinance option_chain() 返回的 calls/puts DataFrame 拍平成统一的 dict 列表。"""
+    contracts = []
+    for ctype, df in (("call", chain.calls), ("put", chain.puts)):
+        for _, row in df.iterrows():
+            contracts.append({
+                "type": ctype,
+                "strike": row.get("strike"),
+                "expiration": expiration,
+                "volume": int(row["volume"]) if row.get("volume") == row.get("volume") and row.get("volume") is not None else 0,
+                "open_interest": int(row["openInterest"]) if row.get("openInterest") == row.get("openInterest") and row.get("openInterest") is not None else 0,
+                "iv": row.get("impliedVolatility"),
+                "last_price": row.get("lastPrice") or 0,
+            })
+    return contracts
+
+
 def _max_pain(contracts: list) -> float | None:
     """标准 max pain 算法：找使期权卖方总损失最小的行权价。"""
     by_strike = {}
     for c in contracts:
         strike = c.get("strike")
         oi = c.get("open_interest") or 0
-        ctype = c.get("option_type")
         if strike is None:
             continue
         by_strike.setdefault(strike, {"call_oi": 0, "put_oi": 0})
-        if ctype == "call":
+        if c["type"] == "call":
             by_strike[strike]["call_oi"] += oi
-        elif ctype == "put":
+        elif c["type"] == "put":
             by_strike[strike]["put_oi"] += oi
 
     if not by_strike:
@@ -131,15 +98,16 @@ def _max_pain(contracts: list) -> float | None:
     return best_strike
 
 
-def get_options_snapshot(ticker: str, api_key: str) -> dict:
-    if not api_key:
-        return {"available": False}
+def get_options_snapshot(ticker: str) -> dict:
+    import yfinance as yf
+
+    tk = yf.Ticker(ticker)
 
     try:
-        underlying_price = _get_underlying_price(ticker, api_key)
-        expirations = _get_expirations(ticker, api_key)
+        underlying_price = tk.fast_info.get("last_price") if hasattr(tk, "fast_info") else None
+        expirations = list(tk.options or [])
     except Exception as e:
-        print(f"[fetch_options] Tradier fetch failed: {e}")
+        print(f"[fetch_options] yfinance fetch failed: {e}")
         return {"available": False, "error": str(e)}
 
     near_expirations = [e for e in expirations if 0 <= _days_to_expiry(e) <= MAX_DAYS_TO_EXPIRY]
@@ -149,17 +117,23 @@ def get_options_snapshot(ticker: str, api_key: str) -> dict:
     near_term = []
     for exp in near_expirations:
         try:
-            near_term.extend(_get_chain(ticker, exp, api_key))
+            chain = tk.option_chain(exp)
+            near_term.extend(_contracts_from_chain(chain, exp))
         except Exception as e:
             print(f"[fetch_options] chain fetch failed for {exp}: {e}")
 
     if not near_term:
         return {"available": False}
 
-    call_vol = sum(c.get("volume") or 0 for c in near_term if c.get("option_type") == "call")
-    put_vol = sum(c.get("volume") or 0 for c in near_term if c.get("option_type") == "put")
-    call_oi = sum(c.get("open_interest") or 0 for c in near_term if c.get("option_type") == "call")
-    put_oi = sum(c.get("open_interest") or 0 for c in near_term if c.get("option_type") == "put")
+    if underlying_price is None:
+        # fast_info 拿不到就退而求其次，用最近到期日里离现价最近的行权价估个大概
+        strikes = [c["strike"] for c in near_term if c.get("strike") is not None]
+        underlying_price = sorted(strikes)[len(strikes) // 2] if strikes else None
+
+    call_vol = sum(c["volume"] for c in near_term if c["type"] == "call")
+    put_vol = sum(c["volume"] for c in near_term if c["type"] == "put")
+    call_oi = sum(c["open_interest"] for c in near_term if c["type"] == "call")
+    put_oi = sum(c["open_interest"] for c in near_term if c["type"] == "put")
 
     pcr_volume = round(put_vol / call_vol, 2) if call_vol else None
     pcr_oi = round(put_oi / call_oi, 2) if call_oi else None
@@ -167,15 +141,10 @@ def get_options_snapshot(ticker: str, api_key: str) -> dict:
     # ATM IV：找最近到期、行权价离现价最近的合约
     atm_iv = None
     if underlying_price:
-        candidates = [
-            c for c in near_term
-            if (c.get("greeks") or {}).get("mid_iv") and c.get("expiration_date") and c.get("strike") is not None
-        ]
-        candidates.sort(
-            key=lambda c: (_days_to_expiry(c["expiration_date"]), abs(c["strike"] - underlying_price))
-        )
+        candidates = [c for c in near_term if c.get("iv") and c.get("strike") is not None]
+        candidates.sort(key=lambda c: (_days_to_expiry(c["expiration"]), abs(c["strike"] - underlying_price)))
         if candidates:
-            atm_iv = candidates[0]["greeks"]["mid_iv"]
+            atm_iv = candidates[0]["iv"]
 
     iv_percentile, iv_history_days = (None, 0)
     if atm_iv is not None:
@@ -186,17 +155,15 @@ def get_options_snapshot(ticker: str, api_key: str) -> dict:
     # 异常大单启发式
     unusual = []
     for c in near_term:
-        vol = c.get("volume") or 0
-        oi = c.get("open_interest") or 0
+        vol, oi = c["volume"], c["open_interest"]
         if vol >= UNUSUAL_MIN_VOLUME and oi > 0 and vol >= UNUSUAL_VOL_OI_RATIO * oi:
-            last_price = c.get("last") or c.get("close") or 0
             unusual.append({
-                "type": c.get("option_type"),
-                "strike": c.get("strike"),
-                "expiration": c.get("expiration_date"),
+                "type": c["type"],
+                "strike": c["strike"],
+                "expiration": c["expiration"],
                 "volume": vol,
                 "open_interest": oi,
-                "notional": round(vol * last_price * 100),
+                "notional": round(vol * c["last_price"] * 100),
             })
     unusual.sort(key=lambda x: x["notional"], reverse=True)
 

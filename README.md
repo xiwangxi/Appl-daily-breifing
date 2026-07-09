@@ -15,7 +15,7 @@ src/
   fetch_price.py        # 股价速览（yfinance）
   fetch_news.py         # 新闻（Finnhub company-news + Google News RSS）
   fetch_analyst.py      # 分析师评级/目标价（yfinance）
-  fetch_options.py      # 期权链/PCR/IV/max pain/异常大单启发式检测（Tradier sandbox）
+  fetch_options.py      # 期权链/PCR/IV/max pain/异常大单启发式检测（yfinance，免费）
   summarize.py          # Claude API 做新闻去重/排序/摘要 + 生成"今日关注点"
   build_message.py      # 拼 Telegram HTML 消息，超长自动按板块分段
   send_telegram.py      # 调 Telegram Bot API 发送
@@ -37,9 +37,8 @@ data/iv_history.json     # IV 历史，用于计算隐含波动率的百分位
 
 ### 2. 数据源 API Key
 - **Finnhub**（新闻，免费额度够用）：https://finnhub.io/register
-  （分析师评级/目标价改用 yfinance 免费拿，不依赖 Finnhub 的付费专属接口）
-- **Tradier**（期权链/IV/PCR，免费 sandbox，需要注册开发者账号，有审核）：
-  https://developer.tradier.com/user/sign_up
+  （分析师评级/目标价、期权数据都改用 yfinance 免费拿，不依赖 Finnhub/Polygon/Tradier
+  的付费或有身份门槛的接口）
 - **Anthropic Claude API**（新闻摘要）：https://console.anthropic.com/settings/keys
 
 ### 3. 配置到 GitHub（推荐，免运维）
@@ -50,7 +49,6 @@ data/iv_history.json     # IV 历史，用于计算隐含波动率的百分位
 | `TELEGRAM_BOT_TOKEN` | 第1步拿到的 token |
 | `TELEGRAM_CHAT_ID` | 第1步拿到的 chat id |
 | `FINNHUB_API_KEY` | Finnhub key |
-| `TRADIER_API_KEY` | Tradier sandbox access token |
 | `ANTHROPIC_API_KEY` | Claude API key |
 
 可选：在 **Variables** 里加 `CLAUDE_MODEL` 覆盖默认模型（默认 `claude-haiku-4-5-20251001`，
@@ -95,8 +93,8 @@ python main.py
 
 ## 五、已知限制 / MVP 说明
 
-- **期权数据**：用 Tradier 的免费 sandbox 环境，数据有一定延迟，对开盘前晨报够用，但不是实时的。
-  sandbox 账号需要在 Tradier 官网申请，有审核（不保证立即通过）。
+- **期权数据**：用 yfinance 抓 Yahoo Finance 的期权链，完全免费、不需要注册任何账号，但数据
+  不是逐笔实时的，对开盘前晨报够用。
 - **异常期权大单**：用启发式规则近似（单张合约当日成交量 ≥ 3倍未平仓量），不是 Unusual Whales
   那种基于逐笔成交方向判断的专业数据。如果之后想接入 Unusual Whales API，只需要在
   `src/fetch_options.py` 里加一个新的数据源函数，`build_message.py` 的展示逻辑不用改。
