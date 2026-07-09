@@ -2,6 +2,7 @@
 数据源：Finnhub /company-news（需要 key，覆盖美股上市公司），
       Google News RSS（免 key，用于非美股上市公司如富士康、大立光、华为，以及作为补充）。
 """
+import re
 import time
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -10,6 +11,19 @@ import feedparser
 import requests
 
 FINNHUB_BASE = "https://finnhub.io/api/v1"
+MAX_SUMMARY_CHARS = 300
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _clean_summary(raw: str) -> str:
+    """Google News RSS 的 summary 字段是一大坨 HTML（相关报道链接列表），
+    这里去标签+截断，避免把摘要 payload 撑爆。"""
+    if not raw:
+        return ""
+    text = _TAG_RE.sub(" ", raw)
+    text = " ".join(text.split())
+    return text[:MAX_SUMMARY_CHARS]
 
 
 def _finnhub_company_news(ticker: str, api_key: str, lookback_hours: int) -> list:
@@ -36,7 +50,7 @@ def _finnhub_company_news(ticker: str, api_key: str, lookback_hours: int) -> lis
             "title": it.get("headline"),
             "url": it.get("url"),
             "source": it.get("source"),
-            "summary": it.get("summary", ""),
+            "summary": _clean_summary(it.get("summary", "")),
             "published": published.isoformat(),
         })
     return out
@@ -62,7 +76,7 @@ def _google_news_rss(query: str, lookback_hours: int, ticker: str = None) -> lis
             "title": entry.get("title"),
             "url": entry.get("link"),
             "source": source or "Google News",
-            "summary": entry.get("summary", ""),
+            "summary": _clean_summary(entry.get("summary", "")),
             "published": published.isoformat() if published else None,
         })
     return out
