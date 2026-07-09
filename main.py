@@ -41,7 +41,7 @@ def load_config():
         "finnhub_api_key": os.environ.get("FINNHUB_API_KEY"),
         "polygon_api_key": os.environ.get("POLYGON_API_KEY"),
         "anthropic_api_key": os.environ.get("ANTHROPIC_API_KEY"),
-        "claude_model": os.environ.get("CLAUDE_MODEL", "claude-haiku-4-5-20251001"),
+        "claude_model": os.environ.get("CLAUDE_MODEL") or "claude-haiku-4-5-20251001",
         "tickers": tickers_config,
     }
 
