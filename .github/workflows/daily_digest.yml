@@ -4,13 +4,16 @@ name: AAPL Daily Telegram Digest
 # 这个 workflow 文件需要合并到默认分支后，定时任务才会真正生效。
 #
 # 慕尼黑当地时间 7:00 早上推送。欧洲和美国的夏令时切换日期不完全一致，
-# 为了不用手动改 cron，这里在 UTC 5:00 和 6:00 各触发一次（工作日），
+# 为了不用手动改 cron，这里在 UTC 5:xx 和 6:xx 各触发一次（工作日），
 # main.py 里 RUN_MODE=scheduled 时会检查当前是否真的是 Europe/Berlin 7点，
 # 不是的话直接跳过，所以不会重复推送。
+#
+# cron 故意不设在整点：GitHub 官方说明整点是全平台 schedule 触发扎堆的高峰期，
+# 负载高时可能被延迟甚至直接跳过（不是排队，是这次触发就没了），错开几分钟能大幅降低概率。
 on:
   schedule:
-    - cron: "0 5 * * 1-5"
-    - cron: "0 6 * * 1-5"
+    - cron: "7 5 * * 1-5"
+    - cron: "7 6 * * 1-5"
   workflow_dispatch: {}  # 允许在 Actions 页面手动触发，方便调试
 
 permissions:
