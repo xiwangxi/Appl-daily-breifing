@@ -48,9 +48,10 @@ data/last_sent.json           # 每个 digest 最后发送日期，防重复
 2. 每个要接收消息的人都要**先给这个机器人发一条 `/start`**（让机器人"认识"他）。
 3. 浏览器打开 `https://api.telegram.org/bot<TOKEN>/getUpdates`，从返回 JSON 里每个人
    对应的 `message.chat.id` 拿到各自的 Chat ID。
-4. 你自己的 chat_id 填 `TELEGRAM_CHAT_ID`（AAPL Daily 和大盘 Daily 都会发给这个人）；
-   第二个人的 chat_id 填 `TELEGRAM_CHAT_ID_2`（**可选**，只有大盘 Daily 会额外发给这个人，
-   不填就只发给你自己）。
+4. 你自己的 chat_id 填 `TELEGRAM_CHAT_ID`（AAPL Daily 和大盘 Daily 都会发给这个人，大盘
+   Daily 中英文都发）；第二个人的 chat_id 填 `TELEGRAM_CHAT_ID_2`（**可选**，只有大盘 Daily
+   会发给这个人，且**只发英文版**，不填就没有第二个接收人）。语言分配写死在
+   `main_market.py` 的 `load_config()` 里，想改成别的组合直接改那几行代码即可。
 
 ### 2. 数据源 API Key
 - **Finnhub**（新闻，免费额度够用）：https://finnhub.io/register

@@ -1,7 +1,8 @@
 """US Market Daily 主入口：宏观视角的美股大盘晨报，中英双语，可以发给多个 Telegram 接收人。
 
 每天运行一次：抓大盘指数/隔夜全球市场/经济日历/宏观新闻 -> Claude 生成中英双语摘要 ->
-先发中文消息、再发英文消息，都发给配置的每一个 chat_id。任何数据源失败都不阻塞其它板块。
+按每个接收人各自配置的语言发送（主接收人中英文都发，先中文后英文；第二接收人只发英文）。
+任何数据源失败都不阻塞其它板块。
 """
 import os
 import sys
@@ -32,11 +33,18 @@ def load_config():
     if os.path.exists(secrets_path):
         load_dotenv(secrets_path)
 
-    chat_ids = [c for c in [os.environ.get("TELEGRAM_CHAT_ID"), os.environ.get("TELEGRAM_CHAT_ID_2")] if c]
+    # 主接收人（你自己）中英文都收；第二接收人目前只收英文版。
+    recipients = []
+    primary_chat_id = os.environ.get("TELEGRAM_CHAT_ID")
+    if primary_chat_id:
+        recipients.append({"chat_id": primary_chat_id, "langs": ["zh", "en"]})
+    second_chat_id = os.environ.get("TELEGRAM_CHAT_ID_2")
+    if second_chat_id:
+        recipients.append({"chat_id": second_chat_id, "langs": ["en"]})
 
     return {
         "telegram_bot_token": os.environ.get("TELEGRAM_BOT_TOKEN"),
-        "telegram_chat_ids": chat_ids,
+        "recipients": recipients,
         "finnhub_api_key": os.environ.get("FINNHUB_API_KEY"),
         "anthropic_api_key": os.environ.get("ANTHROPIC_API_KEY"),
         "claude_model": os.environ.get("CLAUDE_MODEL") or "claude-haiku-4-5-20251001",
@@ -77,7 +85,7 @@ def main():
         print(f"[main_market] 大盘 Daily 今天（{today_local}）已经发过了，跳过")
         return
 
-    if not cfg["telegram_bot_token"] or not cfg["telegram_chat_ids"]:
+    if not cfg["telegram_bot_token"] or not cfg["recipients"]:
         print("[main_market] 缺少 TELEGRAM_BOT_TOKEN 或没有配置任何 chat_id，无法发送，退出。")
         sys.exit(1)
 
@@ -109,20 +117,25 @@ def main():
     )
 
     macro_news = digest.get("macro_news", [])
-    zh_messages = build_message_market.build_market_digest_messages(
-        today_local, market, calendar, macro_news, digest.get("today_focus_zh", ""), "zh",
-    )
-    en_messages = build_message_market.build_market_digest_messages(
-        today_local, market, calendar, macro_news, digest.get("today_focus_en", ""), "en",
-    )
+    messages_by_lang = {
+        "zh": build_message_market.build_market_digest_messages(
+            today_local, market, calendar, macro_news, digest.get("today_focus_zh", ""), "zh",
+        ),
+        "en": build_message_market.build_market_digest_messages(
+            today_local, market, calendar, macro_news, digest.get("today_focus_en", ""), "en",
+        ),
+    }
 
     total_sent, total_failed = 0, 0
-    for chat_id in cfg["telegram_chat_ids"]:
-        for messages in (zh_messages, en_messages):
-            result = send_telegram.send_digest(cfg["telegram_bot_token"], chat_id, messages)
+    for recipient in cfg["recipients"]:
+        # 语言顺序固定 zh -> en，每个接收人只发自己配置的语言列表里有的那些
+        for lang in ("zh", "en"):
+            if lang not in recipient["langs"]:
+                continue
+            result = send_telegram.send_digest(cfg["telegram_bot_token"], recipient["chat_id"], messages_by_lang[lang])
             total_sent += result["sent"]
             total_failed += result["failed"]
-    print(f"[main_market] 发送完成: sent={total_sent} failed={total_failed} 接收人数={len(cfg['telegram_chat_ids'])}")
+    print(f"[main_market] 发送完成: sent={total_sent} failed={total_failed} 接收人数={len(cfg['recipients'])}")
 
     if scheduled:
         last_sent.mark_sent("market", today_local)
