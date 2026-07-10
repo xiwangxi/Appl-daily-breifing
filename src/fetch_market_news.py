@@ -34,8 +34,12 @@ def _clean_summary(raw: str) -> str:
     return text[:MAX_SUMMARY_CHARS]
 
 
-def _finnhub_general_news(lookback_hours: int) -> list:
-    resp = requests.get(f"{FINNHUB_BASE}/news", params={"category": "general"}, timeout=15)
+def _finnhub_general_news(api_key: str, lookback_hours: int) -> list:
+    resp = requests.get(
+        f"{FINNHUB_BASE}/news",
+        params={"category": "general", "token": api_key},
+        timeout=15,
+    )
     resp.raise_for_status()
     items = resp.json()
     cutoff = datetime.now(timezone.utc) - timedelta(hours=lookback_hours)
@@ -87,7 +91,7 @@ def fetch_macro_news(finnhub_key: str, lookback_hours: int = 48) -> list:
 
     if finnhub_key:
         try:
-            results.extend(_finnhub_general_news(lookback_hours))
+            results.extend(_finnhub_general_news(finnhub_key, lookback_hours))
         except Exception as e:
             print(f"[fetch_market_news] Finnhub general news failed: {e}")
 
