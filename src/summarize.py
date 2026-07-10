@@ -128,3 +128,106 @@ def summarize_digest(aapl_news: list, supply_chain_news: list, context: dict, ap
     except Exception as e:
         print(f"[summarize] Claude summarization failed, falling back to raw headlines: {e}")
         return fallback_summary(aapl_news, supply_chain_news)
+
+
+MARKET_SYSTEM_PROMPT = """你是一名美股宏观交易员的助理。给你一批宏观新闻条目(JSON数组，每条含
+id/title/summary/published，summary 是原始报道的简介，可能为空)，以及大盘指数/隔夜全球市场/
+经济日历数据(context)，请完成：
+1. 去重：同一事件的多篇报道只保留信息量最大/来源最权威的一条。
+2. 按对美股大盘（不是某只个股）的重要性从高到低排序，只保留真正会影响大盘方向的宏观事件
+   （货币政策、通胀就业数据、关税贸易、地缘政治、重大政策变化等），过滤掉个股/行业级别的新闻。
+3. 每条新闻写**两个版本**的摘要：summary_zh（中文，40-70字）和 summary_en（English, one
+   concise sentence）。两个版本内容必须一致，只是语言不同，都要提炼具体信息（谁/发生了什么/
+   影响是什么），不是翻译标题，让读者不点链接也能看懂。客观陈述事实，不要加投资建议。
+4. 最多保留 8 条。
+5. 基于这些新闻 + context 里的指数/隔夜市场/经济日历数据，生成"今日市场关注点"的中英文各一句
+   （today_focus_zh 不超过50字，today_focus_en 一句话），点出今天最值得关注的1-2件宏观事件。
+
+重要：news 输出里只带 id 和两个 summary 字段，不要照抄 url/source（我会用 id 在我这边查回）。
+严格只输出如下 JSON，不要有多余文字：
+{
+  "macro_news": [{"id": "m0", "summary_zh": "...", "summary_en": "..."}],
+  "today_focus_zh": "...",
+  "today_focus_en": "..."
+}
+"""
+
+
+def fallback_market_summary(macro_news: list) -> dict:
+    seen_titles = set()
+    out = []
+    for it in sorted(macro_news, key=lambda x: x.get("published") or "", reverse=True):
+        title = (it.get("title") or "").strip()
+        if not title or title in seen_titles:
+            continue
+        seen_titles.add(title)
+        out.append({
+            "summary_zh": title[:60],
+            "summary_en": title[:100],
+            "source": it.get("source"),
+            "url": it.get("url"),
+        })
+        if len(out) >= 8:
+            break
+
+    return {
+        "macro_news": out,
+        "today_focus_zh": "（AI摘要暂不可用，以上为按时间排序的原始新闻标题）",
+        "today_focus_en": "(AI summary unavailable, showing raw headlines sorted by time)",
+    }
+
+
+def summarize_market_digest(macro_news: list, context: dict, api_key: str, model: str) -> dict:
+    if not api_key:
+        return fallback_market_summary(macro_news)
+
+    try:
+        import anthropic
+
+        capped = _cap_recent(macro_news, MAX_RAW_ITEMS_PER_SECTION)
+        id_lookup = {f"m{i}": n for i, n in enumerate(capped)}
+
+        client = anthropic.Anthropic(api_key=api_key)
+        user_payload = {
+            "macro_news": [
+                {"id": f"m{i}", "title": n.get("title"), "summary": n.get("summary"),
+                 "published": n.get("published")}
+                for i, n in enumerate(capped)
+            ],
+            "context": context,
+        }
+        message = client.messages.create(
+            model=model,
+            max_tokens=3000,
+            temperature=0,
+            system=MARKET_SYSTEM_PROMPT,
+            messages=[{"role": "user", "content": json.dumps(user_payload, ensure_ascii=False)}],
+        )
+        text = "".join(block.text for block in message.content if hasattr(block, "text"))
+        text = text.strip()
+        if text.startswith("```"):
+            text = text.strip("`")
+            if text.startswith("json"):
+                text = text[4:]
+        raw_result = json.loads(text)
+
+        resolved_news = []
+        for e in raw_result.get("macro_news") or []:
+            original = id_lookup.get(e.get("id"))
+            if not original:
+                continue
+            resolved_news.append({
+                "summary_zh": e.get("summary_zh"),
+                "summary_en": e.get("summary_en"),
+                "source": original.get("source"),
+                "url": original.get("url"),
+            })
+
+        return {
+            "macro_news": resolved_news,
+            "today_focus_zh": raw_result.get("today_focus_zh", ""),
+            "today_focus_en": raw_result.get("today_focus_en", ""),
+        }
+    except Exception as e:
+        print(f"[summarize] Claude market summarization failed, falling back to raw headlines: {e}")
+        return fallback_market_summary(macro_news)

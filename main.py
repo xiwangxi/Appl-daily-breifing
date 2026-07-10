@@ -19,6 +19,7 @@ import fetch_news  # noqa: E402
 import fetch_options  # noqa: E402
 import fetch_price  # noqa: E402
 import build_message  # noqa: E402
+import last_sent  # noqa: E402
 import send_telegram  # noqa: E402
 import summarize  # noqa: E402
 
@@ -77,6 +78,12 @@ def main():
     if not should_run_now():
         return
 
+    today_local = datetime.now(TARGET_LOCAL_TZ).strftime("%Y-%m-%d")
+    scheduled = os.environ.get("RUN_MODE", "manual") == "scheduled"
+    if scheduled and last_sent.already_sent_today("aapl", today_local):
+        print(f"[main] AAPL digest 今天（{today_local}）已经发过了，跳过（同一天多个 cron 触发点撞到同一小时）")
+        return
+
     if not cfg["telegram_bot_token"] or not cfg["telegram_chat_id"]:
         print("[main] 缺少 TELEGRAM_BOT_TOKEN 或 TELEGRAM_CHAT_ID，无法发送，退出。")
         sys.exit(1)
@@ -118,7 +125,6 @@ def main():
         "summarize",
     )
 
-    today_local = datetime.now(TARGET_LOCAL_TZ).strftime("%Y-%m-%d")
     messages = build_message.build_digest_messages(
         today_local, price,
         digest.get("aapl_news", []), digest.get("supply_chain_news", []),
@@ -127,6 +133,8 @@ def main():
 
     result = send_telegram.send_digest(cfg["telegram_bot_token"], cfg["telegram_chat_id"], messages)
     print(f"[main] 发送完成: {result}")
+    if scheduled:
+        last_sent.mark_sent("aapl", today_local)
 
     all_shown_urls = [{"url": it.get("url")} for it in digest.get("aapl_news", []) + digest.get("supply_chain_news", [])]
     seen = cache.mark_seen(all_shown_urls, seen)

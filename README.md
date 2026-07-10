@@ -1,7 +1,13 @@
-# AAPL Daily Telegram Digest 🍎
+# Daily Telegram Digests 🍎🌎
 
-每天美股开盘前，自动把 AAPL 的股价、公司新闻、供应链/生态动态、分析师评级与目标价、期权市场信号
-拼成一条结构化消息推送到 Telegram，5 分钟内看完建立当天的交易判断依据。
+每天美股开盘前，自动推送两条结构化 Telegram 消息：
+
+1. **US Market Daily**（慕尼黑本地时间约 6:30）—— 美股大盘速览、隔夜全球市场、经济日历、
+   宏观新闻、今日市场关注点，中英双语（先发中文，再发英文），可以同时发给多个接收人。
+2. **AAPL Daily Brief**（慕尼黑本地时间约 7:00）—— AAPL 个股的股价、公司新闻、供应链/生态
+   动态、分析师评级与目标价、期权市场信号，只发给你自己。
+
+5 分钟内看完，建立当天的交易判断依据。
 
 **不构成投资建议，仅为个人信息整理工具。不做自动交易，只做信息聚合，只做每日一次定时推送。**
 
@@ -9,75 +15,105 @@
 
 ```
 config/
-  tickers.yaml          # 关联公司列表、新闻窗口、去重保留天数——改这个文件不用碰代码
+  tickers.yaml          # AAPL Daily 用的关联公司列表、新闻窗口、去重保留天数
   secrets.env.example   # 本地开发用的 key 模板，复制成 secrets.env 填真实值（已 gitignore）
 src/
-  fetch_price.py        # 股价速览（yfinance）
-  fetch_news.py         # 新闻（Finnhub company-news + Google News RSS）
-  fetch_analyst.py      # 分析师评级/目标价（yfinance）
-  fetch_options.py      # 期权链/PCR/IV/max pain/异常大单启发式检测（yfinance，免费）
-  summarize.py          # Claude API 做新闻去重/排序/摘要 + 生成"今日关注点"
-  build_message.py      # 拼 Telegram HTML 消息，超长自动按板块分段
-  send_telegram.py      # 调 Telegram Bot API 发送
-  cache.py               # 已推送新闻去重缓存
-main.py                  # 串联以上所有模块的入口
-.github/workflows/daily_digest.yml   # 定时触发（GitHub Actions cron）
-data/seen_news.json      # 去重缓存（workflow 每次运行后自动 commit 回仓库）
-data/iv_history.json     # IV 历史，用于计算隐含波动率的百分位
+  fetch_price.py            # AAPL 股价速览（yfinance）
+  fetch_news.py             # AAPL + 供应链新闻（Finnhub company-news + Google News RSS）
+  fetch_analyst.py          # AAPL 分析师评级/目标价（yfinance）
+  fetch_options.py          # AAPL 期权链/PCR/IV/max pain/异常大单（yfinance，免费）
+  fetch_market_indices.py   # 大盘：标普/纳指/道指 + 期货 + 隔夜全球市场（yfinance）
+  fetch_market_news.py      # 宏观新闻（Finnhub general news + Google News RSS 宏观关键词）
+  fetch_economic_calendar.py # 经济日历，CPI/非农/FOMC等（Finnhub，可能不可用，不阻塞）
+  summarize.py               # Claude API 摘要（AAPL 中文版 + 大盘中英双语版）
+  build_message.py           # AAPL 消息拼装，HTML + 自动分段
+  build_message_market.py    # 大盘消息拼装，中英双语 + 自动分段
+  send_telegram.py           # 调 Telegram Bot API 发送
+  cache.py                   # 通用新闻去重缓存（AAPL/大盘分别用不同文件）
+  last_sent.py                # 记录每个 digest 今天发过没有，防止 cron 交叉触发重复发送
+main.py                       # AAPL Daily 入口
+main_market.py                 # US Market Daily 入口
+.github/workflows/daily_digest.yml   # 一个 workflow 里跑两个 digest（定时 + 手动触发）
+data/seen_news.json           # AAPL 新闻去重缓存
+data/seen_market_news.json    # 大盘新闻去重缓存
+data/iv_history.json          # AAPL 期权 IV 历史，用于计算百分位
+data/last_sent.json           # 每个 digest 最后发送日期，防重复
 ```
 
 ## 一、准备工作（需要你提供的东西）
 
-### 1. Telegram Bot Token + Chat ID
+### 1. Telegram Bot Token + 收件人 Chat ID（至少1个，最多2个）
 1. Telegram 里搜索 `@BotFather`，发送 `/newbot`，按提示起名字，拿到形如
    `123456789:AAExxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx` 的 Token。
-2. 用你自己的账号给这个机器人发一条 `/start`（让它"认识"你）。
-3. 浏览器打开 `https://api.telegram.org/bot<TOKEN>/getUpdates`，从返回 JSON 的
-   `message.chat.id` 里拿到你的 Chat ID。
+2. 每个要接收消息的人都要**先给这个机器人发一条 `/start`**（让机器人"认识"他）。
+3. 浏览器打开 `https://api.telegram.org/bot<TOKEN>/getUpdates`，从返回 JSON 里每个人
+   对应的 `message.chat.id` 拿到各自的 Chat ID。
+4. 你自己的 chat_id 填 `TELEGRAM_CHAT_ID`（AAPL Daily 和大盘 Daily 都会发给这个人）；
+   第二个人的 chat_id 填 `TELEGRAM_CHAT_ID_2`（**可选**，只有大盘 Daily 会额外发给这个人，
+   不填就只发给你自己）。
 
 ### 2. 数据源 API Key
 - **Finnhub**（新闻，免费额度够用）：https://finnhub.io/register
-  （分析师评级/目标价、期权数据都改用 yfinance 免费拿，不依赖 Finnhub/Polygon/Tradier
-  的付费或有身份门槛的接口）
-- **Anthropic Claude API**（新闻摘要）：https://console.anthropic.com/settings/keys
+  （AAPL 的分析师评级/目标价/期权数据都用 yfinance 免费拿，经济日历用 Finnhub 的
+  `/calendar/economic` 接口，如果这个接口在免费层不可用，大盘 Daily 那部分会显示
+  "数据源暂不可用"，不影响其它板块）
+- **Anthropic Claude API**（摘要，两个 digest 共用）：https://console.anthropic.com/settings/keys
 
 ### 3. 配置到 GitHub（推荐，免运维）
 在仓库 **Settings → Secrets and variables → Actions → New repository secret**，添加：
 
-| Secret 名 | 值 |
-|---|---|
-| `TELEGRAM_BOT_TOKEN` | 第1步拿到的 token |
-| `TELEGRAM_CHAT_ID` | 第1步拿到的 chat id |
-| `FINNHUB_API_KEY` | Finnhub key |
-| `ANTHROPIC_API_KEY` | Claude API key |
+| Secret 名 | 值 | 必填 |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | 第1步拿到的 token | 是 |
+| `TELEGRAM_CHAT_ID` | 你自己的 chat id | 是 |
+| `TELEGRAM_CHAT_ID_2` | 第二个接收人的 chat id | 否，只影响大盘 Daily 是否多发一份 |
+| `FINNHUB_API_KEY` | Finnhub key | 是 |
+| `ANTHROPIC_API_KEY` | Claude API key | 是 |
 
 可选：在 **Variables** 里加 `CLAUDE_MODEL` 覆盖默认模型（默认 `claude-haiku-4-5-20251001`，
-想要更强的新闻归纳质量可以改成 Opus）。
+想要更强的归纳质量可以改成 Opus）。
 
-**重要**：GitHub Actions 的 `schedule` 定时触发只在仓库的**默认分支**上生效。这个 workflow
-文件合并到默认分支之前，定时推送不会自动运行（但你可以在 Actions 页面手动点 "Run workflow" 测试）。
+**重要**：GitHub Actions 的 `schedule` 定时触发只在仓库的**默认分支**上生效，且刚加上/改动
+cron 后可能要一段时间才会被 GitHub 的调度器真正激活（可以在 Actions 页面手动点
+"Run workflow" 立即测试，不受这个限制）。
 
 ## 二、本地测试
 
 ```bash
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-cp config/secrets.env.example config/secrets.env   # 填入真实 key
-python main.py
+cp config/secrets.env.example config/secrets.env   # 填入真实 key，TELEGRAM_CHAT_ID_2 可留空
+python main_market.py   # 大盘 Daily
+python main.py           # AAPL Daily
 ```
 
 本地运行时 `RUN_MODE` 默认是 `manual`，不受"是否到点"限制，随时跑随时发。
 
 ## 三、推送时间是怎么定的
 
-你要的是**慕尼黑本地时间早上 7 点**醒来看到消息。欧盟和美国的夏令时切换日期不完全一致，
-为了不用每年手动改 cron，`daily_digest.yml` 里设了两个 UTC 触发点（工作日 5:00 和 6:00 UTC），
-`main.py` 在 `RUN_MODE=scheduled` 时会检查当前是否真的是 `Europe/Berlin` 时区的 7 点，
-不是的话直接跳过退出——所以虽然 workflow 每天触发两次，实际只会真正发送一次。
-如果你想改成别的城市/时间，改 `main.py` 里的 `TARGET_LOCAL_TZ` 和 `TARGET_LOCAL_HOUR` 即可。
+大盘 Daily 目标是**慕尼黑本地时间 6:30 左右**，AAPL Daily 是**7:00 左右**（先看大盘宏观，
+再看个股）。欧盟和美国的夏令时切换日期不完全一致，`daily_digest.yml` 里给每个 digest 各设了
+两个 UTC cron 触发点覆盖夏令时/冬令时，且故意不设在整点（GitHub 官方说明整点是全平台 cron
+触发的拥堵高峰，可能被延迟甚至直接跳过）。每个脚本自己用 `Europe/Berlin` 时区判断当前是不是
+自己的目标小时，不是就跳过；`data/last_sent.json` 记录每个 digest 今天发过没有，即使两个
+digest 的备用 cron 在夏令时切换期间偶尔落进同一个小时，也不会导致重复推送（最多是大盘 Daily
+偶尔早发一点）。如果你想改成别的城市/时间，改 `main.py` / `main_market.py` 里的
+`TARGET_LOCAL_TZ` 和 `TARGET_LOCAL_HOUR` 即可。
 
 ## 四、消息模板
 
+**US Market Daily**（中文版 + English version，各自独立成一条或多条消息）：
+```
+🌎 US Market Daily — {date}
+
+【一、大盘速览】标普/纳指/道指昨收+涨跌幅，盘前期货方向
+【二、隔夜全球市场】日经/恒生/上证/DAX/富时 涨跌幅
+【三、经济日历 & 重要事件（未来7天）】CPI/非农/FOMC等高影响力美国经济数据
+【四、宏观新闻】Claude按重要性排序+中英文摘要+来源链接
+【五、今日市场关注点】Claude基于以上信息生成的一句话总结
+```
+
+**AAPL Daily Brief**：
 ```
 🍎 AAPL Daily Brief — {date}
 
@@ -96,25 +132,32 @@ python main.py
 - **期权数据**：用 yfinance 抓 Yahoo Finance 的期权链，完全免费、不需要注册任何账号，但数据
   不是逐笔实时的，对开盘前晨报够用。
 - **异常期权大单**：用启发式规则近似（单张合约当日成交量 ≥ 3倍未平仓量），不是 Unusual Whales
-  那种基于逐笔成交方向判断的专业数据。如果之后想接入 Unusual Whales API，只需要在
-  `src/fetch_options.py` 里加一个新的数据源函数，`build_message.py` 的展示逻辑不用改。
+  那种基于逐笔成交方向判断的专业数据。
 - **IV 历史百分位**：数据从项目上线那天开始每天积累到 `data/iv_history.json`，积累不满10个
   交易日之前，消息里会显示"历史数据积累中"。
-- **分析师目标价/评级**：用 yfinance 免费拿（Finnhub 免费版把这两个接口限制成付费专属了），
-  拿不到时消息里会标注"数据源暂不可用"，不影响其它板块正常发送。
-- **新闻摘要**：Claude 会基于标题+原始简介做真正的归纳整理，用中文输出，不是简单翻译标题——
-  但如果 Claude API 调用失败会降级成"按时间排序的原始英文标题"，这种情况消息里的"今日关注点"
-  会明确提示"AI摘要暂不可用"。
-- **去重**：`data/seen_news.json` 记录已推送过的新闻链接，保留天数由 `config/tickers.yaml`
-  的 `dedup_retention_days` 控制（默认7天），每次 workflow 运行后自动 commit 回仓库。
+- **经济日历**：用 Finnhub 的 `/calendar/economic` 接口，免费层是否包含这个接口不确定
+  （其它几个"专属"接口之前实测被限制成付费），拿不到就整块标注"数据源暂不可用"，不阻塞
+  大盘 Daily 的其它板块。
+- **新闻摘要**：Claude 会基于标题+原始简介做真正的归纳整理，不是简单翻译标题——但如果
+  Claude API 调用失败会降级成"按时间排序的原始英文标题"，这种情况"今日关注点"会明确
+  提示"AI摘要暂不可用"。
+- **去重**：AAPL 新闻和大盘宏观新闻分别用 `data/seen_news.json` / `data/seen_market_news.json`
+  两个独立文件去重，保留天数由各自代码里的 `dedup_retention_days` 控制（默认7天），每次
+  workflow 运行后自动 commit 回仓库。
 
-## 六、调整关联公司列表
+## 六、调整关联公司列表 / 宏观关键词
 
-直接改 `config/tickers.yaml`，不用碰代码。非美股上市公司（比如富士康、大立光、华为）设置
-`ticker: null` + `name_only: true` + `news_keywords: [...]`，只用于新闻关键词搜索。
+- AAPL Daily 的关联公司：直接改 `config/tickers.yaml`，不用碰代码。非美股上市公司（比如
+  富士康、大立光、华为）设置 `ticker: null` + `name_only: true` + `news_keywords: [...]`，
+  只用于新闻关键词搜索。
+- 大盘 Daily 的宏观新闻关键词：改 `src/fetch_market_news.py` 里的 `MACRO_KEYWORDS` 列表。
+- 大盘 Daily 关注的指数：改 `src/fetch_market_indices.py` 里的 `US_INDICES` / `US_FUTURES` /
+  `GLOBAL_INDICES` 列表。
 
 ## 七、后续可加的功能（不阻塞当前版本）
 
 - 双向交互：回复消息触发机器人重新拉取某项数据
 - 更精细的 Unusual Options Activity（接入付费数据源）
 - 供应链公司也接入期权数据（目前期权模块只做 AAPL 本身）
+- 经济日历如果 Finnhub 免费层不可用，可以换成 FRED API（美联储官方数据，免费但需要单独申请
+  API key）
