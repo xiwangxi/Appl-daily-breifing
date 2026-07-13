@@ -30,10 +30,10 @@ src/
   build_message_market.py    # 大盘消息拼装，中英双语 + 自动分段
   send_telegram.py           # 调 Telegram Bot API 发送
   cache.py                   # 通用新闻去重缓存（AAPL/大盘分别用不同文件）
-  last_sent.py                # 记录每个 digest 今天发过没有，防止 cron 交叉触发重复发送
+  last_sent.py                # 记录每个 digest 今天发过没有，防止外部定时服务重复触发
 main.py                       # AAPL Daily 入口
 main_market.py                 # US Market Daily 入口
-.github/workflows/daily_digest.yml   # 一个 workflow 里跑两个 digest（定时 + 手动触发）
+.github/workflows/daily_digest.yml   # 一个 workflow 里跑两个 digest（只走 workflow_dispatch，见下方「外部定时触发配置」）
 data/seen_news.json           # AAPL 新闻去重缓存
 data/seen_market_news.json    # 大盘新闻去重缓存
 data/iv_history.json          # AAPL 期权 IV 历史，用于计算百分位
@@ -74,9 +74,37 @@ data/last_sent.json           # 每个 digest 最后发送日期，防重复
 可选：在 **Variables** 里加 `CLAUDE_MODEL` 覆盖默认模型（默认 `claude-haiku-4-5-20251001`，
 想要更强的归纳质量可以改成 Opus）。
 
-**重要**：GitHub Actions 的 `schedule` 定时触发只在仓库的**默认分支**上生效，且刚加上/改动
-cron 后可能要一段时间才会被 GitHub 的调度器真正激活（可以在 Actions 页面手动点
-"Run workflow" 立即测试，不受这个限制）。
+### 4. 外部定时触发配置（必须，替代 GitHub 自带的 schedule）
+
+GitHub Actions 自带的 `schedule` 定时触发在实测中完全不可靠——这个仓库上线后跨了好几个
+工作日、cron 配置也确认没问题，但一次都没自动触发过，只有手动/API 触发（`workflow_dispatch`）
+每次都成功。怀疑是 GitHub 对新账号/低活跃度仓库的定时任务有反滥用限制。所以改成用**外部免费
+定时服务**在正确的本地时间，调用 GitHub API 触发 `workflow_dispatch`。
+
+**Step 1：创建一个 GitHub Personal Access Token（PAT）**
+1. 打开 `https://github.com/settings/personal-access-tokens/new`（fine-grained token）
+2. Repository access 选 **Only select repositories** → 选这个仓库
+3. Permissions 里找 **Actions**，设成 **Read and write**
+4. 生成后复制 token（形如 `github_pat_xxxx`），这个只在外部定时服务里配置，**不要**提交到仓库
+
+**Step 2：注册一个免费定时服务**，比如 https://cron-job.org（免费额度够用），创建两个 cron job：
+
+| | 大盘 Daily | AAPL Daily |
+|---|---|---|
+| 触发时间 | 每个工作日 06:30，时区选 Europe/Berlin | 每个工作日 07:00，时区选 Europe/Berlin |
+| 请求方式 | POST | POST |
+| URL | `https://api.github.com/repos/xiwangxi/Appl-daily-breifing/actions/workflows/daily_digest.yml/dispatches` | 同左 |
+| Headers | `Authorization: Bearer <你的PAT>`<br>`Accept: application/vnd.github+json`<br>`Content-Type: application/json` | 同左 |
+| Body (raw JSON) | `{"ref":"main","inputs":{"digest":"market","scheduled":"true"}}` | `{"ref":"main","inputs":{"digest":"aapl","scheduled":"true"}}` |
+
+注意 `inputs` 里的值必须是**字符串** `"true"`，不是 JSON 布尔值 `true`——这是 GitHub API 对
+`workflow_dispatch` 输入参数的要求。选 Europe/Berlin 时区后，定时服务自己处理夏令时/冬令时切换，
+不需要像原来那样手动算 UTC 偏移。
+
+配置完用定时服务自带的"立即执行一次"功能测一下，去 GitHub 仓库的 Actions 页面确认有没有跑起来。
+
+**手动测试**：仍然可以在 Actions 页面点 **Run workflow**，`digest` 默认 `both`（两个都跑），
+`scheduled` 默认 `false`（跳过周末检查和去重，随时能跑，方便调试）。
 
 ## 二、本地测试
 
@@ -92,14 +120,11 @@ python main.py           # AAPL Daily
 
 ## 三、推送时间是怎么定的
 
-大盘 Daily 目标是**慕尼黑本地时间 6:30 左右**，AAPL Daily 是**7:00 左右**（先看大盘宏观，
-再看个股）。欧盟和美国的夏令时切换日期不完全一致，`daily_digest.yml` 里给每个 digest 各设了
-两个 UTC cron 触发点覆盖夏令时/冬令时，且故意不设在整点（GitHub 官方说明整点是全平台 cron
-触发的拥堵高峰，可能被延迟甚至直接跳过）。每个脚本自己用 `Europe/Berlin` 时区判断当前是不是
-自己的目标小时，不是就跳过；`data/last_sent.json` 记录每个 digest 今天发过没有，即使两个
-digest 的备用 cron 在夏令时切换期间偶尔落进同一个小时，也不会导致重复推送（最多是大盘 Daily
-偶尔早发一点）。如果你想改成别的城市/时间，改 `main.py` / `main_market.py` 里的
-`TARGET_LOCAL_TZ` 和 `TARGET_LOCAL_HOUR` 即可。
+大盘 Daily 目标是**慕尼黑本地时间 6:30**，AAPL Daily 是**7:00**（先看大盘宏观，再看个股），
+由外部定时服务（见上面「外部定时触发配置」）在准确的本地时间调用 API 触发，不依赖 GitHub 自带
+的 `schedule`。每个脚本自己只做一个兜底检查：`RUN_MODE=scheduled` 时跳过周末（美股不开盘）；
+`data/last_sent.json` 记录每个 digest 今天发过没有，防止外部服务意外重复触发导致重复推送。
+如果你想改成别的城市/时间，直接改外部定时服务里两个 cron job 的时区和时刻，代码不用动。
 
 ## 四、消息模板
 

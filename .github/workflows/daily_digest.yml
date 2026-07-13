@@ -1,26 +1,29 @@
 name: Daily Telegram Digests
 
-# 注意：GitHub Actions 的 schedule 触发只会在仓库默认分支上运行，
-# 这个 workflow 文件需要合并到默认分支后，定时任务才会真正生效。
+# 注意：GitHub Actions 自带的 schedule 定时触发在这个仓库上实测完全不可靠——上线后跨了
+# 好几个工作日、多个正确配置的 cron 触发点，一次都没有自动跑起来过，只有手动/API 触发
+# （workflow_dispatch）每次都成功。怀疑是 GitHub 对新账号/低活跃度仓库的 schedule 触发有
+# 反滥用限制。所以放弃 schedule，改为用外部免费定时服务（比如 cron-job.org）在正确的本地
+# 时间调用 GitHub API 的 workflow_dispatch 接口来触发，具体配置见 README「外部定时触发配置」。
 #
-# 这一个 workflow 里跑两个 digest：
-#   - main_market.py：美股大盘宏观 Daily，慕尼黑本地时间 6:xx，中英双语，发给所有配置的 chat_id
-#   - main.py：AAPL 个股 Daily，慕尼黑本地时间 7:xx，只发给主 chat_id
-# 欧洲/美国的夏令时切换日期不完全一致，所以每个 digest 各设两个 UTC cron 入口覆盖夏令时/冬令时，
-# 每个脚本自己用 Europe/Berlin 时区判断当前是不是自己的目标小时，不是就跳过。
-# 两个 digest 的目标小时只差1小时，冬令时/夏令时切换时其中一个脚本的"备用"cron入口偶尔会落进
-# 另一个 digest 的目标小时——这种情况靠 data/last_sent.json 的"今天发过了没"标记兜底去重，
-# 不会导致重复推送，最多是大盘 Daily 偶尔早发一点。
-#
-# cron 故意不设在整点：GitHub 官方说明整点是全平台 schedule 触发扎堆的高峰期，
-# 负载高时可能被延迟甚至直接跳过（不是排队，是这次触发就没了），错开几分钟能大幅降低概率。
+# 两个 digest 分开触发：
+#   digest=market -> 只跑 main_market.py（美股大盘宏观 Daily，中英双语）
+#   digest=aapl   -> 只跑 main.py（AAPL 个股 Daily）
+#   digest=both   -> 两个都跑（手动测试用，网页上点 "Run workflow" 默认这个）
+# scheduled=true 表示这是外部定时服务的正式触发（会跳过周末、会做当天去重）；
+# 手动在网页上点 "Run workflow" 时默认 scheduled=false，方便随时测试不受限制。
 on:
-  schedule:
-    - cron: "33 4 * * 1-5"  # 大盘 Daily，夏令时 (Europe/Berlin 6:33)
-    - cron: "33 5 * * 1-5"  # 大盘 Daily，冬令时 (Europe/Berlin 6:33)
-    - cron: "7 5 * * 1-5"   # AAPL Daily，夏令时 (Europe/Berlin 7:07)
-    - cron: "7 6 * * 1-5"   # AAPL Daily，冬令时 (Europe/Berlin 7:07)
-  workflow_dispatch: {}  # 允许在 Actions 页面手动触发，方便调试
+  workflow_dispatch:
+    inputs:
+      digest:
+        description: "跑哪个 digest"
+        type: choice
+        options: [both, market, aapl]
+        default: both
+      scheduled:
+        description: "是否按正式定时任务处理（跳过周末+当天去重）；外部定时服务调用时传 true"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -39,9 +42,9 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run US Market Daily (macro, bilingual)
+        if: ${{ inputs.digest == 'both' || inputs.digest == 'market' }}
         env:
-          # 只有真正的 schedule 触发才检查"是不是本地目标小时"；手动 workflow_dispatch 直接跑，方便调试。
-          RUN_MODE: ${{ github.event_name == 'schedule' && 'scheduled' || 'manual' }}
+          RUN_MODE: ${{ inputs.scheduled && 'scheduled' || 'manual' }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           TELEGRAM_CHAT_ID_2: ${{ secrets.TELEGRAM_CHAT_ID_2 }}
@@ -51,8 +54,9 @@ jobs:
         run: python main_market.py
 
       - name: Run AAPL Daily
+        if: ${{ inputs.digest == 'both' || inputs.digest == 'aapl' }}
         env:
-          RUN_MODE: ${{ github.event_name == 'schedule' && 'scheduled' || 'manual' }}
+          RUN_MODE: ${{ inputs.scheduled && 'scheduled' || 'manual' }}
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           FINNHUB_API_KEY: ${{ secrets.FINNHUB_API_KEY }}

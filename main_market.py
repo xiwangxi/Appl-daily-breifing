@@ -22,8 +22,7 @@ import last_sent  # noqa: E402
 import send_telegram  # noqa: E402
 import summarize  # noqa: E402
 
-TARGET_LOCAL_TZ = ZoneInfo("Europe/Berlin")
-TARGET_LOCAL_HOUR = 6  # 比 AAPL Daily（7点）早一点，先看大盘宏观再看个股
+TARGET_LOCAL_TZ = ZoneInfo("Europe/Berlin")  # 只用来算"今天"的日期和判断周末，具体触发时间点由外部定时服务负责
 MARKET_NEWS_CACHE_PATH = os.path.join(os.path.dirname(__file__), "data", "seen_market_news.json")
 DEDUP_RETENTION_DAYS = 7
 
@@ -52,15 +51,15 @@ def load_config():
 
 
 def should_run_now() -> bool:
+    """GitHub 自带的 schedule 触发器实测完全不可靠，改为外部定时服务在正确的本地时间
+    调用 workflow_dispatch。这里只做周末兜底（外部服务的 cron 表达式本身也该排除周末）。
+    """
     if os.environ.get("RUN_MODE", "manual") != "scheduled":
         return True
 
     now_local = datetime.now(TARGET_LOCAL_TZ)
     if now_local.weekday() >= 5:
         print(f"[main_market] {now_local} 是周末，跳过")
-        return False
-    if now_local.hour != TARGET_LOCAL_HOUR:
-        print(f"[main_market] 当前本地时间 {now_local}，不在目标小时 {TARGET_LOCAL_HOUR} 点，跳过")
         return False
     return True
 

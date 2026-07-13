@@ -23,8 +23,7 @@ import last_sent  # noqa: E402
 import send_telegram  # noqa: E402
 import summarize  # noqa: E402
 
-TARGET_LOCAL_TZ = ZoneInfo("Europe/Berlin")
-TARGET_LOCAL_HOUR = 7  # 用户希望醒来看到推送的当地时间
+TARGET_LOCAL_TZ = ZoneInfo("Europe/Berlin")  # 只用来算"今天"的日期和判断周末，具体触发时间点由外部定时服务负责
 
 
 def load_config():
@@ -47,9 +46,10 @@ def load_config():
 
 
 def should_run_now() -> bool:
-    """GitHub Actions 用两个 UTC cron 触发点覆盖夏令时/冬令时，这里只在真正接近
-    用户本地7点、且是工作日时才真正发送，避免夏令时切换期间重复推送或错过。
-    RUN_MODE=manual（本地手动跑）时跳过这个检查。
+    """GitHub 自带的 schedule 触发器实测完全不可靠（上线后从未真正自动触发过），
+    改为外部定时服务在正确的本地时间调用 workflow_dispatch，具体时刻由外部服务负责。
+    这里只做一个兜底：RUN_MODE=scheduled 时跳过周末（外部服务的 cron 表达式本身也该排除
+    周末，这里是双保险）。RUN_MODE=manual（手动测试）时跳过这个检查，随时能跑。
     """
     if os.environ.get("RUN_MODE", "manual") != "scheduled":
         return True
@@ -57,9 +57,6 @@ def should_run_now() -> bool:
     now_local = datetime.now(TARGET_LOCAL_TZ)
     if now_local.weekday() >= 5:  # 周六=5, 周日=6，美股不开盘
         print(f"[main] {now_local} 是周末，跳过")
-        return False
-    if now_local.hour != TARGET_LOCAL_HOUR:
-        print(f"[main] 当前本地时间 {now_local}，不在目标小时 {TARGET_LOCAL_HOUR} 点，跳过")
         return False
     return True
 
@@ -81,7 +78,7 @@ def main():
     today_local = datetime.now(TARGET_LOCAL_TZ).strftime("%Y-%m-%d")
     scheduled = os.environ.get("RUN_MODE", "manual") == "scheduled"
     if scheduled and last_sent.already_sent_today("aapl", today_local):
-        print(f"[main] AAPL digest 今天（{today_local}）已经发过了，跳过（同一天多个 cron 触发点撞到同一小时）")
+        print(f"[main] AAPL digest 今天（{today_local}）已经发过了，跳过（防止外部定时服务重复触发）")
         return
 
     if not cfg["telegram_bot_token"] or not cfg["telegram_chat_id"]:
