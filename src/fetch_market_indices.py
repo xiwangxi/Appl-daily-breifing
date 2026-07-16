@@ -38,9 +38,11 @@ US_FUTURES = [
     ("YM=F", "道指期货", "Dow Futures"),
 ]
 
-# 隔夜全球市场：亚洲收盘 + 欧洲盘中/收盘，美股开盘前参考
+# 隔夜全球市场：亚洲收盘（重点看日韩台，芯片权重股集中在这几个市场）+ 欧洲盘中/收盘，美股开盘前参考
 GLOBAL_INDICES = [
     ("^N225", "日经225", "Nikkei 225"),
+    ("^KS11", "韩国综合指数(KOSPI)", "KOSPI (South Korea)"),
+    ("^TWII", "台湾加权指数(TAIEX)", "TAIEX (Taiwan)"),
     ("^HSI", "恒生指数", "Hang Seng"),
     ("000001.SS", "上证指数", "Shanghai Composite"),
     ("^GDAXI", "德国DAX", "Germany DAX"),

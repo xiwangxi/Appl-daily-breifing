@@ -1,6 +1,7 @@
 """US Market Daily 主入口：宏观视角的美股大盘晨报，中英双语，可以发给多个 Telegram 接收人。
 
-每天运行一次：抓大盘指数/隔夜全球市场/经济日历/宏观新闻 -> Claude 生成中英双语摘要 ->
+每天运行一次：抓大盘指数/隔夜全球市场(日韩台重点)/半导体板块/宏观日历(FOMC/CPI/PPI/非农)/
+财报日历/宏观新闻 -> Claude 生成中英双语摘要 ->
 按每个接收人各自配置的语言发送（主接收人中英文都发，先中文后英文；第二接收人只发英文）。
 任何数据源失败都不阻塞其它板块。
 """
@@ -15,9 +16,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 import build_message_market  # noqa: E402
 import cache  # noqa: E402
-import fetch_economic_calendar  # noqa: E402
+import fetch_earnings_calendar  # noqa: E402
+import fetch_econ_calendar_static  # noqa: E402
 import fetch_market_indices  # noqa: E402
 import fetch_market_news  # noqa: E402
+import fetch_semiconductor  # noqa: E402
 import last_sent  # noqa: E402
 import send_telegram  # noqa: E402
 import summarize  # noqa: E402
@@ -89,11 +92,9 @@ def main():
         sys.exit(1)
 
     market = safe_call(fetch_market_indices.get_market_snapshot, {"available": False}, "fetch_market_indices")
-    calendar = safe_call(
-        lambda: fetch_economic_calendar.get_upcoming_events(cfg["finnhub_api_key"]),
-        {"available": False},
-        "fetch_economic_calendar",
-    )
+    semi = safe_call(fetch_semiconductor.get_semiconductor_snapshot, {"available": False}, "fetch_semiconductor")
+    calendar = safe_call(fetch_econ_calendar_static.get_upcoming_events, {"available": False}, "fetch_econ_calendar_static")
+    earnings = safe_call(fetch_earnings_calendar.get_upcoming_earnings, [], "fetch_earnings_calendar")
     raw_news = safe_call(
         lambda: fetch_market_news.fetch_macro_news(cfg["finnhub_api_key"]),
         [],
@@ -105,7 +106,9 @@ def main():
 
     context_for_summary = {
         "market": {k: v for k, v in market.items() if k != "available"},
+        "semiconductor": {k: v for k, v in semi.items() if k != "available"},
         "calendar": {k: v for k, v in calendar.items() if k != "available"},
+        "earnings": earnings,
     }
     digest = safe_call(
         lambda: summarize.summarize_market_digest(
@@ -118,10 +121,10 @@ def main():
     macro_news = digest.get("macro_news", [])
     messages_by_lang = {
         "zh": build_message_market.build_market_digest_messages(
-            today_local, market, calendar, macro_news, digest.get("today_focus_zh", ""), "zh",
+            today_local, market, semi, calendar, earnings, macro_news, digest.get("today_focus_zh", ""), "zh",
         ),
         "en": build_message_market.build_market_digest_messages(
-            today_local, market, calendar, macro_news, digest.get("today_focus_en", ""), "en",
+            today_local, market, semi, calendar, earnings, macro_news, digest.get("today_focus_en", ""), "en",
         ),
     }
 

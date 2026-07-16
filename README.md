@@ -2,8 +2,9 @@
 
 每天美股开盘前，自动推送两条结构化 Telegram 消息：
 
-1. **US Market Daily**（慕尼黑本地时间约 6:30）—— 美股大盘速览、隔夜全球市场、经济日历、
-   宏观新闻、今日市场关注点，中英双语（先发中文，再发英文），可以同时发给多个接收人。
+1. **US Market Daily**（慕尼黑本地时间约 6:30）—— 美股大盘速览、隔夜全球市场（重点看日韩台）、
+   半导体板块聚焦、近期重要事件（FOMC/CPI/PPI/非农/自选清单财报）、宏观新闻、今日市场关注点，
+   中英双语（先发中文，再发英文），可以同时发给多个接收人。
 2. **AAPL Daily Brief**（慕尼黑本地时间约 7:00）—— AAPL 个股的股价、公司新闻、供应链/生态
    动态、分析师评级与目标价、期权市场信号，只发给你自己。
 
@@ -22,9 +23,11 @@ src/
   fetch_news.py             # AAPL + 供应链新闻（Finnhub company-news + Google News RSS）
   fetch_analyst.py          # AAPL 分析师评级/目标价（yfinance）
   fetch_options.py          # AAPL 期权链/PCR/IV/max pain/异常大单（yfinance，免费）
-  fetch_market_indices.py   # 大盘：标普/纳指/道指 + 期货 + 隔夜全球市场（yfinance）
+  fetch_market_indices.py   # 大盘：标普/纳指/道指 + 期货 + 隔夜全球市场（日韩台+港沪+欧洲，yfinance）
+  fetch_semiconductor.py    # 半导体板块聚焦：SOX指数/台积电/三星/SK海力士/ASML/NVDA/AMD（yfinance）
   fetch_market_news.py      # 宏观新闻（Finnhub general news + Google News RSS 宏观关键词）
-  fetch_economic_calendar.py # 经济日历，CPI/非农/FOMC等（Finnhub，可能不可用，不阻塞）
+  fetch_econ_calendar_static.py # 宏观日历：FOMC/CPI/PPI(静态年度数据) + 非农(规则计算)，不依赖任何key
+  fetch_earnings_calendar.py    # 自选清单（科技权重股+半导体龙头）近期财报日期（yfinance）
   summarize.py               # Claude API 摘要（AAPL 中文版 + 大盘中英双语版）
   build_message.py           # AAPL 消息拼装，HTML + 自动分段
   build_message_market.py    # 大盘消息拼装，中英双语 + 自动分段
@@ -55,9 +58,9 @@ data/last_sent.json           # 每个 digest 最后发送日期，防重复
 
 ### 2. 数据源 API Key
 - **Finnhub**（新闻，免费额度够用）：https://finnhub.io/register
-  （AAPL 的分析师评级/目标价/期权数据都用 yfinance 免费拿，经济日历用 Finnhub 的
-  `/calendar/economic` 接口，如果这个接口在免费层不可用，大盘 Daily 那部分会显示
-  "数据源暂不可用"，不影响其它板块）
+  （AAPL 的分析师评级/目标价/期权数据、大盘的指数/半导体板块/财报日期都用 yfinance 免费拿；
+  宏观日历(FOMC/CPI/PPI/非农)用的是项目里自带的静态年度数据 + 规则计算，不调用任何 API，
+  见下方「已知限制」）
 - **Anthropic Claude API**（摘要，两个 digest 共用）：https://console.anthropic.com/settings/keys
 
 ### 3. 配置到 GitHub（推荐，免运维）
@@ -133,10 +136,11 @@ python main.py           # AAPL Daily
 🌎 US Market Daily — {date}
 
 【一、大盘速览】标普/纳指/道指昨收+涨跌幅，盘前期货方向
-【二、隔夜全球市场】日经/恒生/上证/DAX/富时 涨跌幅
-【三、经济日历 & 重要事件（未来7天）】CPI/非农/FOMC等高影响力美国经济数据
-【四、宏观新闻】Claude按重要性排序+中英文摘要+来源链接
-【五、今日市场关注点】Claude基于以上信息生成的一句话总结
+【二、隔夜全球市场】日经/KOSPI/TAIEX/恒生/上证/DAX/富时 涨跌幅（重点看日韩台）
+【三、半导体板块聚焦】SOX指数/台积电/三星/SK海力士/ASML/NVDA/AMD 涨跌幅
+【四、近期重要事件】未来3天内的 FOMC/CPI/PPI/非农 + 自选清单公司财报日期
+【五、宏观新闻】Claude按重要性排序+中英文摘要+来源链接
+【六、今日市场关注点】Claude基于以上全部信息生成的一句话总结，重点点出亚洲/半导体异动和近期大事
 ```
 
 **AAPL Daily Brief**：
@@ -161,9 +165,15 @@ python main.py           # AAPL Daily
   那种基于逐笔成交方向判断的专业数据。
 - **IV 历史百分位**：数据从项目上线那天开始每天积累到 `data/iv_history.json`，积累不满10个
   交易日之前，消息里会显示"历史数据积累中"。
-- **经济日历**：用 Finnhub 的 `/calendar/economic` 接口，免费层是否包含这个接口不确定
-  （其它几个"专属"接口之前实测被限制成付费），拿不到就整块标注"数据源暂不可用"，不阻塞
-  大盘 Daily 的其它板块。
+- **宏观日历**：Finnhub 免费层的 `/calendar/economic` 接口实测 403，已弃用。改用
+  `src/fetch_econ_calendar_static.py` 里的静态数据：FOMC 会议日期是美联储官网提前一年公布的
+  年度日程（`FOMC_MEETINGS_2026`），CPI/PPI 发布日期是从 bls.gov 公开搜索确认到的月份
+  （`CPI_RELEASES_2026` / `PPI_RELEASES_2026`，没查到确切日期的月份宁可不显示也不猜），
+  非农就业(NFP)按"每月第一个周五"规则计算。**每年年初需要人工核对/更新一次这三份数据**，
+  否则过了 2026 年年底就会显示"未来3天内没有事件"（不会报错，只是查不到新一年的数据）。
+- **财报日历**：不是全市场财报（免费数据源没有这个），而是 `src/fetch_earnings_calendar.py`
+  里的一份科技权重股+半导体龙头自选清单，用 yfinance 逐个查下一次财报日期，命中未来3天内
+  才显示，想加/减公司直接改 `WATCHLIST` 列表。
 - **新闻摘要**：Claude 会基于标题+原始简介做真正的归纳整理，不是简单翻译标题——但如果
   Claude API 调用失败会降级成"按时间排序的原始英文标题"，这种情况"今日关注点"会明确
   提示"AI摘要暂不可用"。
@@ -179,11 +189,15 @@ python main.py           # AAPL Daily
 - 大盘 Daily 的宏观新闻关键词：改 `src/fetch_market_news.py` 里的 `MACRO_KEYWORDS` 列表。
 - 大盘 Daily 关注的指数：改 `src/fetch_market_indices.py` 里的 `US_INDICES` / `US_FUTURES` /
   `GLOBAL_INDICES` 列表。
+- 半导体板块关注的股票/指数：改 `src/fetch_semiconductor.py` 里的 `SEMI_TICKERS` 列表。
+- 财报日历关注的公司：改 `src/fetch_earnings_calendar.py` 里的 `WATCHLIST` 列表。
+- 宏观日历（FOMC/CPI/PPI）：每年年初去 federalreserve.gov / bls.gov 核对新一年的日期，更新
+  `src/fetch_econ_calendar_static.py` 里的三份年度数据。
 
 ## 七、后续可加的功能（不阻塞当前版本）
 
 - 双向交互：回复消息触发机器人重新拉取某项数据
 - 更精细的 Unusual Options Activity（接入付费数据源）
 - 供应链公司也接入期权数据（目前期权模块只做 AAPL 本身）
-- 经济日历如果 Finnhub 免费层不可用，可以换成 FRED API（美联储官方数据，免费但需要单独申请
-  API key）
+- 宏观日历如果想要更完整的数据（不只是 CPI/PPI/FOMC/非农这几类），可以换成 FRED API
+  （美联储官方数据，免费但需要单独申请 API key）
